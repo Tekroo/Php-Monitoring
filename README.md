@@ -6,19 +6,6 @@
 
 Un outil avancé de surveillance de sécurité pour serveurs PHP, conçu pour détecter les comportements malveillants et les vulnérabilités en temps réel.
 
-## 📋 Table des matières
-
-- [Aperçu](#aperçu)
-- [Fonctionnalités](#fonctionnalités)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Utilisation](#utilisation)
-- [Alertes détectées](#alertes-détectées)
-- [Structure du projet](#structure-du-projet)
-- [Contribuer](#contribuer)
-- [Sécurité](#sécurité)
-- [License](#license)
-
 ## 🔍 Aperçu
 
 **PHP SECURITY MONITOR v3.1** est une solution open-source complète pour la surveillance de sécurité des serveurs PHP. Face à la recrudescence des attaques (webshells, injections, backdoors), cet outil permet une détection proactive des menaces au niveau :
