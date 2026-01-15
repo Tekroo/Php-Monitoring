@@ -10,39 +10,10 @@ Un outil avancé de surveillance de sécurité pour serveurs PHP, conçu pour d�
 
 **PHP SECURITY MONITOR v3.1** est une solution open-source complète pour la surveillance de sécurité des serveurs PHP. Face à la recrudescence des attaques (webshells, injections, backdoors), cet outil permet une détection proactive des menaces au niveau :
 
-- 🗂️ **Système de fichiers** : Permissions, modifications suspectes, code malveillant
-- 🗄️ **Base de données** : Contenu injecté, comptes compromis
-- 📊 **Logs serveur** : Tentatives d'attaque, comportements anormaux
-- 🔐 **Configuration** : Paramètres de sécurité, vulnérabilités connues
-
-## ✨ Fonctionnalités
-
-### 🛡️ **Surveillance système de fichiers**
-- ✅ Détection des permissions dangereuses (777, SUID/SGID sur fichiers PHP)
-- ✅ Surveillance des fichiers modifiés/récemment créés (mtime + ctime)
-- ✅ Analyse de code PHP malveillant avec contexte
-- ✅ Détection d'obfuscation Base64 avancée
-- ✅ Whitelist intégrée pour éviter les faux positifs
-- ✅ Système de baseline avec hash SHA256
-
-### 🗄️ **Analyse base de données** *(optionnel)*
-- ⚠️ Sécurisé par défaut (désactivé)
-- ✅ User lecture seule recommandé
-- ✅ Analyse côté Python (pas de requêtes dangereuses)
-- ✅ Détection de contenu injecté dans les tables sensibles
-
-### 📋 **Analyse logs serveur**
-- ✅ Décodage URL multi-niveaux (UTF-8, double encoding)
-- ✅ Détection LFI/RFI avec patterns étendus
-- ✅ Identification tentatives SQL injection
-- ✅ Analyse XSS dans les requêtes
-- ✅ Surveillance logs FTP (upload PHP, échecs connexion)
-
-### 📊 **Rapports avancés**
-- ✅ Classification des alertes par sévérité
-- ✅ Noms de fichiers clairement identifiés
-- ✅ Statistiques par type d'attaque
-- ✅ Export JSON/texte pour intégration SIEM
+-  **Système de fichiers** : Permissions, modifications suspectes, code malveillant
+-  **Base de données** : Contenu injecté, comptes compromis
+-  **Logs serveur** : Tentatives d'attaque, comportements anormaux
+-  **Configuration** : Paramètres de sécurité, vulnérabilités connues
 
 ## 🚀 Installation
 
