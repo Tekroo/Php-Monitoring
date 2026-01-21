@@ -8,7 +8,7 @@
 > Détectez les webshells, les backdoors, les injections et les activités suspectes grâce à une analyse heuristique avancée.
 
 
-## 🔍 Aperçu
+## Aperçu
 
 **PHP Security Monitor v4.0** est un **outil de sécurité défensive** expert conçu pour les serveurs Linux hébergeant des applications PHP. Il utilise des heuristiques inspirées de l'IA pour détecter les **comportements malveillants, les mécanismes de persistance et les menaces complexes**.
 
@@ -28,33 +28,33 @@ Cet outil est particulièrement utile pour :
 * Modifications de fichiers non autorisées via comparaison de ligne de base (SHA-256)
 
 
-## ✨ Fonctionnalités clés
+## Fonctionnalités clés
 
-### 🔐 Sécurité du système de fichiers
+### Sécurité du système de fichiers
 
 * Analyse récursive et heuristique des fichiers PHP
 * Gestion rigoureuse de la ligne de base (SHA-256)
 * Détection de l'entropie élevée (potentielle obfuscation)
 * Analyse des permissions et de l'appartenance
 
-### 📜 Analyse des journaux
+### Analyse des journaux
 
 * Analyse intelligente des journaux Apache / Nginx
 * Détection des modèles d'attaque et brute-force FTP
 
-### 🗄 Surveillance de la base de données
+### Surveillance de la base de données
 
 * Analyse intelligente des tables SQL (colonnes de type texte/blob)
 * Détection de payloads malveillants injectés via les mêmes règles heuristiques que les fichiers
 * Support pour les bases de données MySQL/MariaDB
 
-### 📊 Rapports et alertes
+### Rapports et alertes
 
 * Journaux structurés et rapports détaillés
 * Niveaux de détection configurables (simple ou advanced)
 
 
-## 🚀 Installation
+## Installation
 
 ### Prérequis
 
@@ -77,7 +77,7 @@ sudo mkdir -p \
 ```
 
 
-## ⚙️ Configuration
+## Configuration
 
 ### Fichier de configuration
 
@@ -105,7 +105,7 @@ database = your_database
 target_tables = ["posts", "pages", "comments", "options"]
 ```
 
-## 📖 Utilisation
+## Utilisation
 
 ### Initialisation (Ligne de base)
 
@@ -127,7 +127,7 @@ Si vous rencontrez un problème d'encodage, exécuter cette commande :
 sudo iconv -f ISO-8859-1 -t UTF-8 php_monitor.py -o php_monitor_v4.py
 ```
 
-## 📂 Structure du projet
+## Structure du projet
 
 ```
 /etc/php_monitor_v4.conf
@@ -146,10 +146,10 @@ sudo iconv -f ISO-8859-1 -t UTF-8 php_monitor.py -o php_monitor_v4.py
 
 Licence MIT © 2024–2026 PHP Security Monitor Contributors
 
-## ⚠️ Avertissement
+## Avertissement
 
 Cet outil est fourni **uniquement à des fins de sécurité défensive**. Les auteurs déclinent toute responsabilité en cas de mauvaise utilisation ou de dommages résultant de son utilisation.
 
-⭐ **Si ce projet vous aide, pensez à lui donner une étoile sur GitHub !**
+ **Si ce projet vous aide, pensez à lui donner une étoile sur GitHub !**
 
 *Dernière mise à jour : Janvier 2026 | Version 4.0.0*
