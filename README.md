@@ -127,6 +127,11 @@ sudo php_monitoring.py --verbose  # Sortie détaillée
 sudo php_monitoring.py --help
 ```
 
+Si vous rencontrez un problème d'encodage, exécuter cette commande : 
+
+```bash
+sudo iconv -f ISO-8859-1 -t UTF-8 php_monitor.py -o php_monitor_v4.py
+```
 ---
 
 ## 📂 Structure du projet
