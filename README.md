@@ -7,7 +7,6 @@
 > **Surveillance de sécurité avancée pour les serveurs PHP**
 > Détectez les webshells, les backdoors, les injections et les activités suspectes grâce à une analyse heuristique avancée.
 
----
 
 ## 🔍 Aperçu
 
@@ -28,7 +27,6 @@ Cet outil est particulièrement utile pour :
 * Injections d'objets PHP et exploitation de wrappers
 * Modifications de fichiers non autorisées via comparaison de ligne de base (SHA-256)
 
----
 
 ## ✨ Fonctionnalités clés
 
@@ -55,7 +53,6 @@ Cet outil est particulièrement utile pour :
 * Journaux structurés et rapports détaillés
 * Niveaux de détection configurables (simple ou advanced)
 
----
 
 ## 🚀 Installation
 
@@ -79,7 +76,6 @@ sudo mkdir -p \
   /var/lib/php_monitor_v4/{snapshots,baseline}
 ```
 
----
 
 ## ⚙️ Configuration
 
@@ -109,8 +105,6 @@ database = your_database
 target_tables = ["posts", "pages", "comments", "options"]
 ```
 
----
-
 ## 📖 Utilisation
 
 ### Initialisation (Ligne de base)
@@ -132,7 +126,6 @@ Si vous rencontrez un problème d'encodage, exécuter cette commande :
 ```bash
 sudo iconv -f ISO-8859-1 -t UTF-8 php_monitor.py -o php_monitor_v4.py
 ```
----
 
 ## 📂 Structure du projet
 
@@ -149,19 +142,13 @@ sudo iconv -f ISO-8859-1 -t UTF-8 php_monitor.py -o php_monitor_v4.py
 └── snapshots/
 ```
 
----
-
 ## 📄 Licence
 
 Licence MIT © 2024–2026 PHP Security Monitor Contributors
 
----
-
 ## ⚠️ Avertissement
 
 Cet outil est fourni **uniquement à des fins de sécurité défensive**. Les auteurs déclinent toute responsabilité en cas de mauvaise utilisation ou de dommages résultant de son utilisation.
-
----
 
 ⭐ **Si ce projet vous aide, pensez à lui donner une étoile sur GitHub !**
 
