@@ -407,19 +407,22 @@ class FileBaselineManager:
         return h.hexdigest()
 
     def create_baseline(self, paths: List[str]) -> Dict[str, str]:
-        """Cree une baseline des fichiers PHP"""
+        """Crée une baseline des fichiers"""
         print("\n[+] Création de la baseline des fichiers...")
 
         baseline = {}
+        file_scanner = EnhancedFileScanner(self.config, ThreatLogger(self.config))
 
         for path in paths:
             for root, dirs, files in os.walk(path):
+                # Filtrer les dossiers à ignorer
                 dirs[:] = [d for d in dirs if not any(x in os.path.join(root, d) for x in [
                     "/vendor/", "/node_modules/", "/.git/", "/cache/", "/tmp/"
                 ])]
 
                 for file in files:
-                    if file.endswith((".php", ".phtml", ".php5", ".php7")):
+                    # Utiliser la même logique que should_scan_file
+                    if file_scanner.should_scan_file(file):
                         filepath = os.path.join(root, file)
                         try:
                             baseline[filepath] = self.compute_file_hash(filepath)
@@ -429,7 +432,7 @@ class FileBaselineManager:
         with open(self.baseline_file, "w") as f:
             json.dump(baseline, f, indent=2)
 
-        print(f"[+] Baseline créée : {self.baseline_file}")
+        print(f"[+] Baseline créée avec {len(baseline)} fichiers : {self.baseline_file}")
         return baseline
 
     def load_baseline(self) -> Dict[str, str]:
@@ -441,29 +444,36 @@ class FileBaselineManager:
             return json.load(f)
 
     def compare_with_baseline(self, current_paths: List[str]) -> Dict[str, List[str]]:
-        """Compare l’état actuel avec la baseline"""
+        """Compare l'état actuel avec la baseline"""
         print("\n[+] Comparaison avec la baseline...")
 
         baseline = self.load_baseline()
+        if not baseline:
+            return {"modified": [], "deleted": [], "new": []}
+        
         current_files = {}
         modified = []
         deleted = []
         new_files = []
 
-        # Scanner les fichiers actuels
+        # Scanner les fichiers actuels avec la même logique que le scanner
+        file_scanner = EnhancedFileScanner(self.config, ThreatLogger(self.config))
+        
         for path in current_paths:
             for root, dirs, files in os.walk(path):
+                # Filtrer les dossiers à ignorer
                 dirs[:] = [d for d in dirs if not any(x in os.path.join(root, d) for x in [
                     "/vendor/", "/node_modules/", "/.git/", "/cache/", "/tmp/"
                 ])]
 
                 for file in files:
-                    if file.endswith(".php"):
+                    if file_scanner.should_scan_file(file):
                         filepath = os.path.join(root, file)
                         try:
                             current_files[filepath] = self.compute_file_hash(filepath)
-                        except:
-                            pass
+                        except Exception as e:
+                            print(f"[-] Erreur hash {filepath}: {e}")
+                            continue
 
         # Détection des fichiers modifiés
         for file, hash_val in current_files.items():
@@ -478,6 +488,9 @@ class FileBaselineManager:
             if file not in current_files:
                 deleted.append(file)
 
+        print(f"  Total dans baseline: {len(baseline)} fichiers")
+        print(f"  Total actuels: {len(current_files)} fichiers")
+        
         return {
             "modified": modified,
             "deleted": deleted,
@@ -940,14 +953,42 @@ class EnhancedFileScanner:
         return any(pattern in dirpath for pattern in skip_patterns)
     
     def should_scan_file(self, filename: str) -> bool:
-        """Check if file should be scanned based on extension"""
-        extensions = ['.php', '.php3', '.php4', '.php5', '.php7', '.phtml']
+        """Vérifie si un fichier doit être scanné"""
+        # Extensions PHP
+        php_extensions = ['.php', '.php3', '.php4', '.php5', '.php7', '.phtml', '.phps']
         
-        # In simple mode, also scan other file types
+        # Autres extensions potentiellement dangereuses
+        other_extensions = ['.inc', '.php.inc', '.module', '.plugin']
+        
+        # Fichiers sans extension ou avec extension suspecte
+        suspicious_patterns = [
+            r'^\.ht',  # Fichiers .htaccess, etc.
+            r'config\.',  # Fichiers de configuration
+            r'web\.config',
+            r'wp-config\.php',
+        ]
+        
+        # Vérifier les extensions PHP
+        if any(filename.lower().endswith(ext) for ext in php_extensions):
+            return True
+        
+        # Vérifier les autres extensions
+        if self.config.detection_level == "advanced":
+            if any(filename.lower().endswith(ext) for ext in other_extensions):
+                return True
+            
+            # Vérifier les motifs suspects
+            for pattern in suspicious_patterns:
+                if re.search(pattern, filename, re.IGNORECASE):
+                    return True
+        
+        # Mode simple: inclure plus de types de fichiers
         if self.config.detection_level == "simple":
-            extensions.extend(['.txt', '.html', '.htm', '.js', '.inc'])
+            simple_extensions = ['.txt', '.html', '.htm', '.js', '.json', '.xml']
+            if any(filename.lower().endswith(ext) for ext in simple_extensions):
+                return True
         
-        return any(filename.lower().endswith(ext) for ext in extensions)
+        return False
     
     def print_stats(self):
         """Print scanning statistics"""
@@ -1191,7 +1232,16 @@ class PHPExpertSecurityMonitor:
         # Create directories
         self.config.log_dir.mkdir(parents=True, exist_ok=True)
         self.config.snapshot_dir.mkdir(parents=True, exist_ok=True)
-        
+
+    def create_initial_baseline(self):
+        """Crée la baseline initiale si elle n'existe pas"""
+        if not self.baseline_manager.baseline_file.exists():
+            print("\n[+] Création de la baseline initiale...")
+            self.baseline_manager.create_baseline(self.config.php_paths)
+            print(f"[+] Baseline créée : {self.baseline_manager.baseline_file}")
+        else:
+            print(f"[+] Baseline existante : {self.baseline_manager.baseline_file}")
+
     def run_simple_scan(self):
         """Run simple detection scan (fast, broad)"""
         print("\n" + "="*70)
@@ -1295,30 +1345,107 @@ class PHPExpertSecurityMonitor:
         self.baseline_manager.create_baseline(self.config.php_paths)
         print("[+] Baseline created.")
 
-# Corrigez-la ainsi :
+    def ensure_baseline_exists(self):
+        """Vérifie et crée la baseline si nécessaire"""
+        if not self.baseline_manager.baseline_file.exists():
+            print("\n[!] Aucune baseline trouvée.")
+            print("[+] Création automatique de la baseline...")
+            self.baseline_manager.create_baseline(self.config.php_paths)
+            print("[+] Baseline créée avec succès.")
+            return True
+        return False
+
     def check_baseline_changes(self):
-        """Check for changes compared to baseline"""
-        if not hasattr(self, 'baseline_manager'):
-            self.baseline_manager = FileBaselineManager(self.config)
+        """Vérifie les changements par rapport à la baseline"""
+        # S'assurer que la baseline existe
+        if not self.baseline_manager.baseline_file.exists():
+            print("\n[-] Aucune baseline trouvée.")
+            print("[+] Création de la baseline maintenant...")
+            self.baseline_manager.create_baseline(self.config.php_paths)
+            print("[+] Baseline créée. Relancez le scan pour détecter les changements.")
+            return
         
-        changes = self.baseline_manager.compare_with_baseline(self.config.php_paths)
+        print("\n[+] Vérification des changements depuis la baseline...")
         
-        if changes["modified"] or changes["new"] or changes["deleted"]:
-            # Log threats for significant changes
+        try:
+            changes = self.baseline_manager.compare_with_baseline(self.config.php_paths)
+            
+            if not any([changes['modified'], changes['new'], changes['deleted']]):
+                print("  Aucun changement détecté depuis la baseline.")
+                return
+            
+            # Afficher les résultats
+            print(f"\n  RÉSULTATS:")
+            print(f"  -----------")
+            print(f"  Fichiers modifiés: {len(changes['modified'])}")
+            print(f"  Fichiers nouveaux: {len(changes['new'])}")
+            print(f"  Fichiers supprimés: {len(changes['deleted'])}")
+            
+            # Afficher les détails
+            if changes['modified']:
+                print(f"\n  Fichiers modifiés (premiers 10):")
+                for i, file in enumerate(changes['modified'][:10], 1):
+                    print(f"    {i}. {file}")
+                if len(changes['modified']) > 10:
+                    print(f"    ... et {len(changes['modified']) - 10} autres")
+            
+            if changes['new']:
+                print(f"\n  Nouveaux fichiers (premiers 10):")
+                for i, file in enumerate(changes['new'][:10], 1):
+                    print(f"    {i}. {file}")
+                if len(changes['new']) > 10:
+                    print(f"    ... et {len(changes['new']) - 10} autres")
+            
+            # Loguer les menaces
+            threat_count = 0
             for filepath in changes["modified"]:
+                try:
+                    current_hash = self.baseline_manager.compute_file_hash(filepath)
+                    
+                    threat = DetectionRule(
+                        name="FILE_MODIFIED",
+                        pattern="",
+                        severity="medium",
+                        description=f"Fichier modifié depuis la baseline",
+                        confidence=0.85,
+                        tags=["baseline", "integrity", "file-change"]
+                    )
+                    self.logger.log_threat(
+                        rule=threat,
+                        filepath=filepath,
+                        context={
+                            "change_type": "modified",
+                            "hash_current_short": current_hash[:16],
+                            "detection_method": "baseline_comparison"
+                        }
+                    )
+                    threat_count += 1
+                    
+                except Exception as e:
+                    self.logger.logger.error(f"Erreur lors du traitement de {filepath}: {e}")
+            
+            for filepath in changes["new"]:
                 threat = DetectionRule(
-                    name="FILE_MODIFIED",
+                    name="NEW_FILE_DETECTED",
                     pattern="",
-                    severity="medium",
-                    description="File modified since baseline",
-                    confidence=0.75,
-                    tags=["baseline", "integrity"]
+                    severity="low",
+                    description="Nouveau fichier détecté",
+                    confidence=0.70,
+                    tags=["baseline", "new-file"]
                 )
                 self.logger.log_threat(
                     rule=threat,
                     filepath=filepath,
-                    context={"change_type": "modified"}
+                    context={"change_type": "new"}
                 )
+                threat_count += 1
+            
+            if threat_count > 0:
+                print(f"\n[+] {threat_count} changements détectés et logués comme menaces potentielles")
+                
+        except Exception as e:
+            self.logger.logger.error(f"Erreur lors de la vérification de la baseline: {e}")
+            print(f"[-] Erreur: {e}")
 
 
     def print_results(self, start_time: float):
@@ -1339,19 +1466,19 @@ class PHPExpertSecurityMonitor:
         summary = self.logger.get_summary()
         
         if summary["total_threat_score"] == 0:
-            print("✅ No significant threats detected")
-            print("✅ System appears clean")
+            print("? No significant threats detected")
+            print("? System appears clean")
         elif summary["total_threat_score"] < 10:
-            print("⚠️  Low risk threats detected")
-            print("⚠️  Review threats in log files")
+            print("??  Low risk threats detected")
+            print("??  Review threats in log files")
         elif summary["total_threat_score"] < 30:
-            print("⚠️  Medium risk threats detected")
-            print("⚠️  Immediate review recommended")
-            print("⚠️  Check critical and high severity threats first")
+            print("??  Medium risk threats detected")
+            print("??  Immediate review recommended")
+            print("??  Check critical and high severity threats first")
         else:
-            print("🚨 HIGH RISK THREATS DETECTED")
-            print("🚨 IMMEDIATE ACTION REQUIRED")
-            print("🚨 Isolate affected systems if possible")
+            print("?? HIGH RISK THREATS DETECTED")
+            print("?? IMMEDIATE ACTION REQUIRED")
+            print("?? Isolate affected systems if possible")
         
         print(f"\nScan completed in {duration:.2f} seconds")
         print("="*70)
@@ -1418,6 +1545,29 @@ Examples:
         # Initialize monitor
         monitor = PHPExpertSecurityMonitor(detection_level=args.level)
         
+        # Gestion des baselines
+        if args.create_baseline:
+            print("\n[+] Création de la baseline...")
+            monitor.baseline_manager.create_baseline(monitor.config.php_paths)
+            print(f"[+] Baseline créée : {monitor.baseline_manager.baseline_file}")
+            sys.exit(0)
+        
+        if args.update_baseline:
+            print("\n[+] Mise à jour de la baseline...")
+            monitor.baseline_manager.create_baseline(monitor.config.php_paths)
+            print(f"[+] Baseline mise à jour : {monitor.baseline_manager.baseline_file}")
+            sys.exit(0)
+        
+        # Avant de lancer le scan, vérifier si la baseline existe
+        if monitor.config.detection_level == "advanced":
+            if not monitor.baseline_manager.baseline_file.exists():
+                print("\n[!] Aucune baseline trouvée.")
+                response = input("Voulez-vous créer une baseline maintenant? (o/n): ")
+                if response.lower() in ['o', 'oui', 'y', 'yes']:
+                    monitor.baseline_manager.create_baseline(monitor.config.php_paths)
+                    print("[+] Baseline créée. Relancez le scan pour la comparaison.")
+                    sys.exit(0)
+
         # Override paths if specified
         if args.path:
             monitor.config.php_paths = [args.path]
