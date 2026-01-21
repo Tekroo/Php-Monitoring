@@ -1,0 +1,6 @@
+# Requirements for PHP Security Monitor v4.0
+
+# Python modules
+mysql-connector-python==8.1.0    # MySQL database connector
+python-magic==0.4.27             # File type detection (magic numbers)
+dataclasses; python_version < "3.7"  # Dataclasses for older Python versions
