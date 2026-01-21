@@ -20,6 +20,7 @@ import magic
 import gc
 import traceback
 import math
+import mysql.connector
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set, Any, Callable
@@ -145,6 +146,15 @@ class EnhancedConfig:
         self.recent_hours = 24
         self.max_file_size = self.settings["max_file_size"]
         self.db_check_enabled = self.settings.get("check_database_content", False)
+        
+        # Database parameters
+        self.db_config = {
+            'host': 'localhost',
+            'user': 'root',
+            'password': '',
+            'database': '',
+            'target_tables': []
+        }
         
         # Whitelist patterns (only used in advanced mode)
         self.whitelist_patterns = [
@@ -362,6 +372,16 @@ class EnhancedConfig:
                     for key in ['recent_hours', 'max_file_size']:
                         if key in section:
                             setattr(self, key, int(section[key]))
+                            
+                if 'DATABASE' in config:
+                    db_section = config['DATABASE']
+                    for key in ['host', 'user', 'password', 'database']:
+                        if key in db_section:
+                            self.db_config[key] = db_section[key]
+                    if 'target_tables' in db_section:
+                        self.db_config['target_tables'] = json.loads(db_section['target_tables'])
+                    if 'enabled' in db_section:
+                        self.db_check_enabled = db_section.getboolean('enabled')
                             
             except Exception as e:
                 print(f"Warning: Error loading config: {e}")
@@ -1061,6 +1081,99 @@ class EnhancedLogAnalyzer:
 
 
 # ====================================================================
+# DATABASE SCANNER
+# ====================================================================
+
+class DatabaseScanner:
+    """Scanner for malicious content in database tables"""
+    
+    def __init__(self, config: EnhancedConfig, logger: ThreatLogger):
+        self.config = config
+        self.logger = logger
+        self.db_config = config.db_config
+        
+    def scan_database(self):
+        """Scan configured database tables for threats"""
+        if not self.config.db_check_enabled:
+            return
+            
+        if not self.db_config['database'] or not self.db_config['target_tables']:
+            self.logger.logger.warning("Database scanning enabled but no database or tables configured.")
+            return
+            
+        print(f"\nScanning database: {self.db_config['database']}")
+        print("-" * 50)
+        
+        try:
+            conn = mysql.connector.connect(
+                host=self.db_config['host'],
+                user=self.db_config['user'],
+                password=self.db_config['password'],
+                database=self.db_config['database']
+            )
+            cursor = conn.cursor(dictionary=True)
+            
+            for table in self.db_config['target_tables']:
+                self.scan_table(cursor, table)
+                
+            cursor.close()
+            conn.close()
+            
+        except mysql.connector.Error as err:
+            self.logger.logger.error(f"Database error: {err}")
+        except Exception as e:
+            self.logger.logger.error(f"Unexpected error during database scan: {e}")
+            
+    def scan_table(self, cursor, table: str):
+        """Scan all columns of a table for malicious patterns"""
+        print(f"  Scanning table: {table}...")
+        
+        try:
+            # Get text-based columns
+            cursor.execute(f"SHOW COLUMNS FROM `{table}`")
+            columns = [row['Field'] for row in cursor.fetchall() 
+                       if any(t in row['Type'].lower() for t in ['char', 'text', 'blob'])]
+            
+            if not columns:
+                return
+                
+            # Fetch all rows (limit to avoid memory issues if huge, though dictionary=True might be slow)
+            cursor.execute(f"SELECT * FROM `{table}`")
+            rows = cursor.fetchall()
+            
+            for row in rows:
+                for col in columns:
+                    content = str(row[col]) if row[col] else ""
+                    if not content:
+                        continue
+                        
+                    self.check_content(content, table, col, row)
+                    
+        except Exception as e:
+            self.logger.logger.error(f"Error scanning table {table}: {e}")
+            
+    def check_content(self, content: str, table: str, col: str, row: Dict):
+        """Check string content for malicious patterns"""
+        # We reuse some rules from the file scanner
+        for rule in self.config.rules:
+            if rule.regex.search(content):
+                primary_key = list(row.keys())[0] # Guessing first col is PK
+                pk_val = row[primary_key]
+                
+                self.logger.log_threat(
+                    rule=rule,
+                    filepath=f"DB:{self.db_config['database']}.{table}",
+                    line_content=f"Table: {table}, Column: {col}, PK({primary_key}): {pk_val}",
+                    context={
+                        "detection_method": "db_scan",
+                        "table": table,
+                        "column": col,
+                        "pk_value": pk_val
+                    }
+                )
+
+
+# ====================================================================
 # MAIN MONITOR CLASS
 # ====================================================================
 
@@ -1072,6 +1185,7 @@ class PHPExpertSecurityMonitor:
         self.logger = ThreatLogger(self.config)
         self.file_scanner = EnhancedFileScanner(self.config, self.logger)
         self.log_analyzer = EnhancedLogAnalyzer(self.config, self.logger)
+        self.db_scanner = DatabaseScanner(self.config, self.logger)
         self.baseline_manager = FileBaselineManager(self.config)  # <-- AJOUT IMPORTANT        
         
         # Create directories
@@ -1096,6 +1210,10 @@ class PHPExpertSecurityMonitor:
         
         # Basic log analysis
         self.log_analyzer.analyze_all_logs()
+        
+        # Database analysis
+        if self.config.db_check_enabled:
+            self.db_scanner.scan_database()
         
         # Print results
         self.print_results(start_time)
@@ -1138,6 +1256,11 @@ class PHPExpertSecurityMonitor:
         print("-" * 40)
         self.check_baseline_changes()
 
+        # Phase 6: Database content analysis
+        if self.config.db_check_enabled:
+            print("\n[PHASE 6] Database content analysis")
+            print("-" * 40)
+            self.db_scanner.scan_database()
         
         # Print results
         self.print_results(start_time)
@@ -1330,13 +1453,12 @@ Examples:
 
 
 if __name__ == "__main__":
-    # Install python-magic if needed
-    try:
-        import magic
-    except ImportError:
-        print("Installing required package: python-magic")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "python-magic"])
-        import magic
-    
+    # Install required packages if needed
+    for package, import_name in [('python-magic', 'magic'), ('mysql-connector-python', 'mysql.connector')]:
+        try:
+            __import__(import_name)
+        except ImportError:
+            print(f"Installing required package: {package}")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", package])
     
     main()
