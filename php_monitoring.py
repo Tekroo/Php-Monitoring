@@ -21,6 +21,10 @@ import gc
 import traceback
 import math
 import mysql.connector
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Tuple, Optional, Set, Any, Callable
@@ -122,13 +126,21 @@ class EnhancedConfig:
         }
     }
     
-    def __init__(self, detection_level: str = "advanced"):
+    def __init__(self, detection_level: str = "advanced", user: str = None):
         self.detection_level = detection_level
+        self.user = user
         self.config_file = Path("/etc/php_monitor_v4.conf")
-        self.log_dir = Path("/var/log/php_monitor_v4")
-        self.snapshot_dir = Path("/var/lib/php_monitor_v4/snapshots")
-        self.baseline_file = Path("/var/lib/php_monitor_v4/baseline.json")
-        self.threat_db_file = Path("/var/lib/php_monitor_v4/threats.json")
+        
+        # Base directories
+        base_log_dir = Path("/var/log/php_monitor_v4")
+        base_lib_dir = Path("/var/lib/php_monitor_v4")
+        
+        # User-specific paths if user is provided
+        user_suffix = f"_{user}" if user else ""
+        self.log_dir = base_log_dir / f"logs{user_suffix}"
+        self.snapshot_dir = base_lib_dir / f"snapshots{user_suffix}"
+        self.baseline_file = base_lib_dir / f"baseline{user_suffix}.json"
+        self.threat_db_file = base_lib_dir / f"threats{user_suffix}.json"
         
         # Load detection level settings
         self.settings = self.DETECTION_LEVELS.get(detection_level, self.DETECTION_LEVELS["advanced"])
@@ -146,6 +158,17 @@ class EnhancedConfig:
         self.recent_hours = 24
         self.max_file_size = self.settings["max_file_size"]
         self.db_check_enabled = self.settings.get("check_database_content", False)
+        
+        # Email configuration
+        self.email_config = {
+            'enabled': False,
+            'smtp_server': 'localhost',
+            'smtp_port': 587,
+            'smtp_user': '',
+            'smtp_password': '',
+            'from_addr': 'php-monitor@localhost',
+            'to_addr': ''
+        }
         
         # Database parameters
         self.db_config = {
@@ -354,21 +377,35 @@ class EnhancedConfig:
                 if 'PHP_MONITOR' in config:
                     section = config['PHP_MONITOR']
                     
-                    # Load lists as JSON
-                    list_fields = ['php_paths', 'log_paths', 'sensitive_dirs']
-                    for field in list_fields:
-                        if field in section:
-                            setattr(self, field, json.loads(section[field]))
-                    
-                    # Load simple values
+                    # 1. Load user and detection level first (they affect paths)
+                    if 'user' in section and not self.user:
+                        self.user = section['user']
+                        # Update paths if user was found in config and not passed in CLI
+                        user_suffix = f"_{self.user}" if self.user else ""
+                        base_log_dir = Path("/var/log/php_monitor_v4")
+                        base_lib_dir = Path("/var/lib/php_monitor_v4")
+                        self.log_dir = base_log_dir / f"logs{user_suffix}"
+                        self.snapshot_dir = base_lib_dir / f"snapshots{user_suffix}"
+                        self.baseline_file = base_lib_dir / f"baseline{user_suffix}.json"
+                        self.threat_db_file = base_lib_dir / f"threats{user_suffix}.json"
+
                     if 'detection_level' in section:
                         self.detection_level = section['detection_level']
                         self.settings = self.DETECTION_LEVELS.get(
                             self.detection_level, 
                             self.DETECTION_LEVELS["advanced"]
                         )
+
+                    # 2. Load paths with user replacement
+                    list_fields = ['php_paths', 'log_paths', 'sensitive_dirs']
+                    for field in list_fields:
+                        if field in section:
+                            paths = json.loads(section[field])
+                            if self.user:
+                                paths = [p.replace("{user}", self.user) for p in paths]
+                            setattr(self, field, paths)
                     
-                    # Update settings from config
+                    # 3. Update remaining settings
                     for key in ['recent_hours', 'max_file_size']:
                         if key in section:
                             setattr(self, key, int(section[key]))
@@ -382,6 +419,16 @@ class EnhancedConfig:
                         self.db_config['target_tables'] = json.loads(db_section['target_tables'])
                     if 'enabled' in db_section:
                         self.db_check_enabled = db_section.getboolean('enabled')
+                
+                if 'EMAIL' in config:
+                    email_section = config['EMAIL']
+                    if 'enabled' in email_section:
+                        self.email_config['enabled'] = email_section.getboolean('enabled')
+                    for key in ['smtp_server', 'smtp_user', 'smtp_password', 'from_addr', 'to_addr']:
+                        if key in email_section:
+                            self.email_config[key] = email_section[key]
+                    if 'smtp_port' in email_section:
+                        self.email_config['smtp_port'] = int(email_section['smtp_port'])
                             
             except Exception as e:
                 print(f"Warning: Error loading config: {e}")
@@ -505,6 +552,106 @@ class FileBaselineManager:
 class ThreatLogger:
     """Advanced logging with threat scoring and categorization"""
     
+    HTML_TEMPLATE = """
+    <!DOCTYPE html>
+    <html lang="fr">
+    <head>
+        <meta charset="UTF-8">
+        <title>Rapport de Sécurité PHP - {user}</title>
+        <style>
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.6; color: #333; max-width: 1000px; margin: 0 auto; padding: 20px; background-color: #f4f7f6; }}
+            .header {{ background-color: #2c3e50; color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }}
+            .summary-box {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }}
+            .stat-card {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); text-align: center; }}
+            .stat-number {{ font-size: 24px; font-weight: bold; margin-bottom: 5px; }}
+            .stat-label {{ color: #666; font-size: 14px; text-transform: uppercase; }}
+            .perf-section {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 30px; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            .perf-item {{ text-align: center; }}
+            .perf-value {{ font-size: 18px; font-weight: bold; margin-bottom: 5px; }}
+            .perf-bar-bg {{ background: #eee; height: 10px; border-radius: 5px; overflow: hidden; margin-top: 5px; }}
+            .perf-bar-fill {{ height: 100%; border-radius: 5px; transition: width 0.5s ease; }}
+            .bar-low {{ background: #2ecc71; }}
+            .bar-med {{ background: #f1c40f; }}
+            .bar-high {{ background: #e74c3c; }}
+            .threat-list {{ background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+            .threat-item {{ border-left: 5px solid #eee; padding: 15px; margin-bottom: 15px; background: #fafafa; }}
+            .threat-item.critical {{ border-left-color: #e74c3c; background: #fdf2f2; }}
+            .threat-item.high {{ border-left-color: #e67e22; background: #fef5e7; }}
+            .threat-item.medium {{ border-left-color: #f1c40f; background: #fef9e7; }}
+            .threat-item.low {{ border-left-color: #3498db; background: #ebf5fb; }}
+            .severity-badge {{ display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; text-transform: uppercase; margin-bottom: 10px; }}
+            .critical .severity-badge {{ background: #e74c3c; color: white; }}
+            .high .severity-badge {{ background: #e67e22; color: white; }}
+            .file-path {{ font-family: monospace; color: #2980b9; word-break: break-all; }}
+            .description {{ font-weight: bold; margin: 5px 0; }}
+            .code-snippet {{ background: #2c3e50; color: #ecf0f1; padding: 10px; border-radius: 4px; font-family: monospace; margin-top: 10px; overflow-x: auto; font-size: 13px; }}
+            .no-threats {{ text-align: center; padding: 50px; color: #27ae60; }}
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <div>
+                <h1 style="margin:0">Rapport de Sécurité PHP</h1>
+                <p style="margin:5px 0 0 0">Utilisateur: {user} | {date}</p>
+            </div>
+            <div style="text-align:right">
+                <div style="font-size:12px">Score Total</div>
+                <div style="font-size:32px; font-weight:bold">{score}</div>
+            </div>
+        </div>
+
+        <div class="summary-box">
+            <div class="stat-card">
+                <div class="stat-number" style="color:#e74c3c">{critical_count}</div>
+                <div class="stat-label">Critiques</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number" style="color:#e67e22">{high_count}</div>
+                <div class="stat-label">Élevées</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{medium_count}</div>
+                <div class="stat-label">Moyennes</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{files_scanned}</div>
+                <div class="stat-label">Fichiers Scannés</div>
+            </div>
+        </div>
+
+        <h2 style="color:#2c3e50">Performance Système</h2>
+        <div class="perf-section">
+            <div class="perf-item">
+                <div class="stat-label">CPU</div>
+                <div class="perf-value">{cpu_usage}%</div>
+                <div class="perf-bar-bg"><div class="perf-bar-fill {cpu_color}" style="width:{cpu_usage}%"></div></div>
+            </div>
+            <div class="perf-item">
+                <div class="stat-label">RAM</div>
+                <div class="perf-value">{ram_usage}%</div>
+                <div class="perf-bar-bg"><div class="perf-bar-fill {ram_color}" style="width:{ram_usage}%"></div></div>
+                <div style="font-size:11px; color:#666; margin-top:5px">{ram_used}MB / {ram_total}MB</div>
+            </div>
+            <div class="perf-item">
+                <div class="stat-label">Disque</div>
+                <div class="perf-value">{disk_usage}%</div>
+                <div class="perf-bar-bg"><div class="perf-bar-fill {disk_color}" style="width:{disk_usage}%"></div></div>
+                <div style="font-size:11px; color:#666; margin-top:5px">{disk_used}MB / {disk_total}MB</div>
+            </div>
+        </div>
+
+        <div class="threat-list">
+            <h2>Détails des menaces détectées</h2>
+            {threat_details}
+        </div>
+        
+        <p style="text-align:center; color:#95a5a6; font-size:12px; margin-top:30px">
+            Généré par PHP SECURITY MONITOR v4.0
+        </p>
+    </body>
+    </html>
+    """
+    
     def __init__(self, config: EnhancedConfig):
         self.config = config
         self.log_dir = config.log_dir
@@ -528,6 +675,7 @@ class ThreatLogger:
         self.log_file = self.log_dir / f"scan_{timestamp}.log"
         self.alert_file = self.log_dir / f"alerts_{timestamp}.log"
         self.report_file = self.log_dir / f"report_{timestamp}.txt"
+        self.html_report_file = self.log_dir / f"report_{timestamp}.html"
         self.threat_file = self.log_dir / f"threats_{timestamp}.json"
         
         # Main logger
@@ -633,6 +781,126 @@ class ThreatLogger:
             "scan_time": datetime.now().isoformat()
         }
     
+    def generate_reports(self, stats: Dict = None):
+        """Génère les rapports finaux (TXT et HTML)"""
+        self.generate_html_report(stats)
+        print(f"[+] Rapport HTML généré : {self.html_report_file}")
+        print(f"[+] Rapport TXT généré : {self.report_file}")
+        
+        # Envoi de l'email si configuré
+        if self.config.email_config['enabled'] and self.config.email_config['to_addr']:
+            self.send_email_report()
+
+    def send_email_report(self):
+        """Envoie le rapport par email"""
+        print(f"[+] Envoi du rapport par email à {self.config.email_config['to_addr']}...")
+        
+        try:
+            msg = MIMEMultipart()
+            msg['From'] = self.config.email_config['from_addr']
+            msg['To'] = self.config.email_config['to_addr']
+            msg['Subject'] = f"Alerte Sécurité PHP : {sum(len(v) for v in self.threats_by_severity.values())} menaces détectées"
+            
+            # Corps du mail (texte simple)
+            summary = self.get_summary()
+            body = f"Le scan de sécurité PHP est terminé pour l'utilisateur {self.config.user or 'Système'}.\n\n"
+            body += f"Score de menace total : {summary['total_threat_score']}\n"
+            body += f"Menaces Critiques : {len(self.threats_by_severity.get('critical', []))}\n"
+            body += f"Menaces Élevées : {len(self.threats_by_severity.get('high', []))}\n"
+            body += f"Menaces Moyennes : {len(self.threats_by_severity.get('medium', []))}\n\n"
+            body += "Veuillez trouver le rapport détaillé en pièce jointe."
+            
+            msg.attach(MIMEText(body, 'plain'))
+            
+            # Pièce jointe HTML
+            if self.html_report_file.exists():
+                with open(self.html_report_file, "rb") as f:
+                    part = MIMEApplication(f.read(), Name=self.html_report_file.name)
+                part['Content-Disposition'] = f'attachment; filename="{self.html_report_file.name}"'
+                msg.attach(part)
+            
+            # Envoi via SMTP
+            server = smtplib.SMTP(self.config.email_config['smtp_server'], self.config.email_config['smtp_port'])
+            server.starttls()
+            
+            if self.config.email_config['smtp_user'] and self.config.email_config['smtp_password']:
+                server.login(self.config.email_config['smtp_user'], self.config.email_config['smtp_password'])
+            
+            server.send_message(msg)
+            server.quit()
+            print("[+] Email envoyé avec succès.")
+            
+        except Exception as e:
+            self.logger.error(f"Erreur lors de l'envoi de l'email : {e}")
+            print(f"[-] Erreur lors de l'envoi de l'email : {e}")
+
+    def generate_html_report(self, stats: Dict = None):
+        """Génère un rapport HTML élégant et simple"""
+        
+        threat_details = ""
+        relevant_severities = ["critical", "high", "medium"]
+        
+        # Performance data
+        perf = stats.get("perf", {"cpu": 0, "ram": {"percent": 0, "used": 0, "total": 0}, "disk": {"percent": 0, "used": 0, "total": 0}})
+        
+        def get_color(percent):
+            if percent < 60: return "bar-low"
+            if percent < 85: return "bar-med"
+            return "bar-high"
+
+        # Collecter toutes les menaces importantes
+        all_threats = []
+        for sev in relevant_severities:
+            all_threats.extend(self.threats_by_severity.get(sev, []))
+        
+        # Trier par sévérité (Critical first)
+        severity_order = {"critical": 0, "high": 1, "medium": 2}
+        all_threats.sort(key=lambda x: severity_order.get(x['severity'], 3))
+        
+        if not all_threats:
+            threat_details = '<div class="no-threats"><h3>Aucune menace importante détectée. Le système semble sain.</h3></div>'
+        else:
+            for threat in all_threats:
+                code_block = ""
+                if 'content' in threat and threat['content']:
+                    code_block = f'<div class="code-snippet">{threat["content"]}</div>'
+                
+                line_info = f" (Ligne {threat['line']})" if threat.get('line') else ""
+                
+                threat_details += f"""
+                <div class="threat-item {threat['severity']}">
+                    <span class="severity-badge">{threat['severity']}</span>
+                    <div class="description">{threat['rule']}: {threat['description']}</div>
+                    <div class="file-path">{threat['file']}{line_info}</div>
+                    {code_block}
+                </div>
+                """
+        
+        html_content = self.HTML_TEMPLATE.format(
+            user=self.config.user or "Système",
+            date=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            score=self.total_threat_score,
+            critical_count=len(self.threats_by_severity.get("critical", [])),
+            high_count=len(self.threats_by_severity.get("high", [])),
+            medium_count=len(self.threats_by_severity.get("medium", [])),
+            files_scanned=stats.get("files_scanned", 0) if stats else "N/A",
+            threat_details=threat_details,
+            # Performance fields
+            cpu_usage=perf["cpu"],
+            cpu_color=get_color(perf["cpu"]),
+            ram_usage=perf["ram"]["percent"],
+            ram_used=perf["ram"]["used"],
+            ram_total=perf["ram"]["total"],
+            ram_color=get_color(perf["ram"]["percent"]),
+            disk_usage=perf["disk"]["percent"],
+            disk_used=perf["disk"]["used"],
+            disk_total=perf["disk"]["total"],
+            disk_color=get_color(perf["disk"]["percent"])
+        )
+        
+        with open(self.html_report_file, 'w', encoding='utf-8') as f:
+            f.write(html_content)
+
     def print_summary(self):
         """Print summary to console"""
         print("\n" + "="*70)
@@ -1214,6 +1482,51 @@ class DatabaseScanner:
                 )
 
 
+class PerformanceMonitor:
+    """Monitor system performance (CPU, RAM, Disk) using system commands"""
+    
+    @staticmethod
+    def get_cpu_usage() -> float:
+        try:
+            # Using 'top' to get load average as a fallback or proxy for CPU usage
+            cmd = "top -bn1 | grep 'Cpu(s)' | sed 's/.*, *\([0-9.]*\)%* id.*/\\1/' | awk '{print 100 - $1}'"
+            output = subprocess.check_output(cmd, shell=True).decode().strip()
+            return float(output)
+        except:
+            return 0.0
+
+    @staticmethod
+    def get_ram_usage() -> Dict[str, float]:
+        try:
+            cmd = "free -m | grep Mem"
+            output = subprocess.check_output(cmd, shell=True).decode().split()
+            total = float(output[1])
+            used = float(output[2])
+            percent = (used / total) * 100
+            return {"total": total, "used": used, "percent": round(percent, 1)}
+        except:
+            return {"total": 0, "used": 0, "percent": 0}
+
+    @staticmethod
+    def get_disk_usage(path="/") -> Dict[str, float]:
+        try:
+            cmd = f"df -m {path} | tail -1"
+            output = subprocess.check_output(cmd, shell=True).decode().split()
+            total = float(output[1])
+            used = float(output[2])
+            percent = float(output[4].replace('%', ''))
+            return {"total": total, "used": used, "percent": percent}
+        except:
+            return {"total": 0, "used": 0, "percent": 0}
+
+    def get_full_stats(self) -> Dict:
+        return {
+            "cpu": self.get_cpu_usage(),
+            "ram": self.get_ram_usage(),
+            "disk": self.get_disk_usage()
+        }
+
+
 # ====================================================================
 # MAIN MONITOR CLASS
 # ====================================================================
@@ -1221,13 +1534,14 @@ class DatabaseScanner:
 class PHPExpertSecurityMonitor:
     """Main monitor class with multi-level detection"""
     
-    def __init__(self, detection_level: str = "advanced"):
-        self.config = EnhancedConfig(detection_level)
+    def __init__(self, detection_level: str = "advanced", user: str = None):
+        self.config = EnhancedConfig(detection_level, user)
         self.logger = ThreatLogger(self.config)
         self.file_scanner = EnhancedFileScanner(self.config, self.logger)
         self.log_analyzer = EnhancedLogAnalyzer(self.config, self.logger)
         self.db_scanner = DatabaseScanner(self.config, self.logger)
         self.baseline_manager = FileBaselineManager(self.config)  # <-- AJOUT IMPORTANT        
+        self.perf_monitor = PerformanceMonitor()
         
         # Create directories
         self.config.log_dir.mkdir(parents=True, exist_ok=True)
@@ -1452,10 +1766,15 @@ class PHPExpertSecurityMonitor:
         """Print scan results"""
         duration = time.time() - start_time
         
+        # Collect performance metrics
+        perf_stats = self.perf_monitor.get_full_stats()
+        
         # Print statistics
         self.file_scanner.print_stats()
         
-        # Print threat summary
+        # Generate and print threat summary
+        combined_stats = {**self.file_scanner.stats, "perf": perf_stats}
+        self.logger.generate_reports(combined_stats)
         self.logger.print_summary()
         
         # Final recommendations
@@ -1521,6 +1840,14 @@ Examples:
                        type=str,
                        help="Specific path to scan (overrides config)")
     
+    parser.add_argument("--user", "-u",
+                       type=str,
+                       help="Specific user for the scan")
+    
+    parser.add_argument("--email", "-e",
+                       type=str,
+                       help="Email address to send the report to")
+    
     parser.add_argument("--create-baseline", 
                        action="store_true",
                        help="Create initial file baseline")
@@ -1543,7 +1870,12 @@ Examples:
     
     try:
         # Initialize monitor
-        monitor = PHPExpertSecurityMonitor(detection_level=args.level)
+        monitor = PHPExpertSecurityMonitor(detection_level=args.level, user=args.user)
+        
+        # Override email if specified in CLI
+        if args.email:
+            monitor.config.email_config['to_addr'] = args.email
+            monitor.config.email_config['enabled'] = True
         
         # Gestion des baselines
         if args.create_baseline:

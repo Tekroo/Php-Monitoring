@@ -83,26 +83,7 @@ sudo mkdir -p \
 
 Le script recherche son fichier de configuration dans `/etc/php_monitor_v4.conf`.
 
-Exemple de contenu pour `php_monitor_v4.conf` :
 
-```ini
-[PHP_MONITOR]
-detection_level = advanced
-php_paths = ["/var/www/html", "/home/*/public_html"]
-sensitive_dirs = ["uploads", "tmp", "cache", "temp"]
-log_paths = ["/var/log/apache2", "/var/log/nginx"]
-ftp_log = /var/log/vsftpd.log
-recent_hours = 24
-max_file_size = 10485760
-db_check_enabled = true
-
-[DATABASE]
-enabled = true
-host = localhost
-user = php_monitor_ro
-password = strong_password
-database = your_database
-target_tables = ["posts", "pages", "comments", "options"]
 ```
 
 ## Utilisation
